@@ -5,7 +5,9 @@ from typing import List
 
 import pandas as pd
 import streamlit as st
-from reportlab.graphics.barcode import code128
+from barcode.codex import Code128
+from barcode.writer import ImageWriter, SVGWriter
+from PIL import Image
 from reportlab.lib.units import inch
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
@@ -113,36 +115,74 @@ def draw_sku_line(c: canvas.Canvas, sku: str):
     draw_centered_text(c, sku, Y3, FONT_BOLD, font_size)
 
 
-def build_barcode_obj(sku: str):
-    barcode_height = 0.72 * inch
-    barcode_max_width = AVAILABLE_WIDTH * 0.84
+def barcode_png_bytes(sku: str) -> bytes:
+    """
+    使用 python-barcode 生成 PNG 条码。
+    """
+    sku = normalize_text(sku)
+    fp = io.BytesIO()
 
-    bar_width = 1.0
-    bc = code128.Code128(
-        sku,
-        barWidth=bar_width,
-        barHeight=barcode_height,
-        humanReadable=False,
+    barcode = Code128(sku, writer=ImageWriter())
+    barcode.write(
+        fp,
+        options={
+            "write_text": False,
+            "module_width": 0.20,
+            "module_height": 18.0,
+            "quiet_zone": 1.0,
+            "background": "white",
+            "foreground": "black",
+            "dpi": 300,
+            "format": "PNG",
+        },
     )
+    fp.seek(0)
+    return fp.getvalue()
 
-    if bc.width > barcode_max_width and bc.width > 0:
-        scale = barcode_max_width / bc.width
-        bar_width = max(0.18, bar_width * scale)
-        bc = code128.Code128(
-            sku,
-            barWidth=bar_width,
-            barHeight=barcode_height,
-            humanReadable=False,
-        )
-    return bc
+
+def barcode_svg_markup(sku: str) -> str:
+    """
+    使用 python-barcode 生成 SVG，用于页面预览。
+    """
+    sku = normalize_text(sku)
+    fp = io.BytesIO()
+
+    barcode = Code128(sku, writer=SVGWriter())
+    barcode.write(
+        fp,
+        options={
+            "write_text": False,
+            "module_width": 0.20,
+            "module_height": 18.0,
+            "quiet_zone": 1.0,
+            "background": "white",
+            "foreground": "black",
+        },
+    )
+    fp.seek(0)
+    return fp.read().decode("utf-8")
 
 
 def draw_barcode_line(c: canvas.Canvas, sku: str):
-    bc = build_barcode_obj(sku)
-    barcode_height = 0.72 * inch
-    x = (PAGE_WIDTH - bc.width) / 2
-    y = BARCODE_CENTER_Y - barcode_height / 2
-    bc.drawOn(c, x, y)
+    png_bytes = barcode_png_bytes(sku)
+    image = Image.open(io.BytesIO(png_bytes))
+
+    # 保持宽高比，并限制在标签区域内
+    img_w, img_h = image.size
+    target_h = 0.72 * inch
+    scale = target_h / img_h
+    target_w = img_w * scale
+
+    max_w = AVAILABLE_WIDTH * 0.84
+    if target_w > max_w:
+        scale = max_w / img_w
+        target_w = img_w * scale
+        target_h = img_h * scale
+
+    x = (PAGE_WIDTH - target_w) / 2
+    y = BARCODE_CENTER_Y - target_h / 2
+
+    c.drawInlineImage(image, x, y, width=target_w, height=target_h)
 
 
 def draw_qty_line(c: canvas.Canvas):
@@ -225,10 +265,6 @@ def create_excel_template() -> bytes:
 
 
 def render_label_preview(container_no: str, client_code: str, sku: str):
-    """
-    纯 HTML 预览，不再依赖 createBarcodeDrawing。
-    页面预览展示版式与文字；正式 PDF 仍会输出真实 Code128 条码。
-    """
     prefix, last4 = split_container(container_no)
     safe_prefix = prefix.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe_last4 = last4.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -237,6 +273,7 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
 
     font_px = int(calc_sku_font_size(sku) * 1.35)
     font_px = max(font_px, 14)
+    barcode_svg = barcode_svg_markup(sku)
 
     html = f"""
     <div style="
@@ -269,22 +306,10 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
         ">
             {safe_sku}
         </div>
-        <div style="display:flex; justify-content:center; align-items:center; margin-top:8px; height:64px;">
-            <div style="
-                width:82%;
-                height:58px;
-                border:1px solid #bbb;
-                background: repeating-linear-gradient(
-                    to right,
-                    #111 0px, #111 2px,
-                    #fff 2px, #fff 4px,
-                    #111 4px, #111 5px,
-                    #fff 5px, #fff 8px
-                );
-            "></div>
-        </div>
-        <div style="text-align:center; font-size:12px; color:#666; margin-top:-6px;">
-            预览条码占位图（正式 PDF 中为真实 Code128 条码）
+        <div style="display:flex; justify-content:center; align-items:center; margin-top:8px; min-height:64px;">
+            <div style="width:82%; height:64px; overflow:hidden;">
+                {barcode_svg}
+            </div>
         </div>
         <div style="text-align:right; font-size:22px; font-weight:700; margin-bottom:4px;">
             Qty: __________
@@ -407,9 +432,9 @@ def preview_records(df: pd.DataFrame):
         )
 
 
-st.set_page_config(page_title="收货标签生成器（云端兼容版）", page_icon="🏷️", layout="wide")
+st.set_page_config(page_title="收货标签生成器（无 ReportLab 条码依赖版）", page_icon="🏷️", layout="wide")
 
-st.title("🏷️ 收货标签生成器（云端兼容版）")
+st.title("🏷️ 收货标签生成器（无 ReportLab 条码依赖版）")
 st.caption("支持手动输入 + Excel 批量导入；支持同一 PDF 内生成多组不同 SKU 标签；支持先预览后下载 PDF。")
 
 left, right = st.columns([1, 1])
