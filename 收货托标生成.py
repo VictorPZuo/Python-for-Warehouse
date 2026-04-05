@@ -21,18 +21,18 @@ PAGE_WIDTH = 6 * inch
 PAGE_HEIGHT = 4 * inch
 PAGE_SIZE = (PAGE_WIDTH, PAGE_HEIGHT)
 
-MARGIN_X = 0.35 * inch
+MARGIN_X = 0.30 * inch
 AVAILABLE_WIDTH = PAGE_WIDTH - 2 * MARGIN_X
 
 FONT_REGULAR = "Helvetica"
 FONT_BOLD = "Helvetica-Bold"
 
 # 固定版式位置
-Y1 = PAGE_HEIGHT - 0.62 * inch   # 集装箱号
-Y2 = PAGE_HEIGHT - 1.18 * inch   # 客户代码
-Y3 = PAGE_HEIGHT - 1.88 * inch   # SKU
+Y1 = PAGE_HEIGHT - 0.55 * inch   # 集装箱号
+Y2 = PAGE_HEIGHT - 1.05 * inch   # 客户代码
+Y3 = PAGE_HEIGHT - 1.70 * inch   # SKU
 BARCODE_CENTER_Y = PAGE_HEIGHT - 2.72 * inch
-Y5 = PAGE_HEIGHT - 3.52 * inch   # Qty
+Y5 = PAGE_HEIGHT - 3.60 * inch   # Qty
 
 
 def normalize_text(text: str) -> str:
@@ -51,7 +51,13 @@ def split_container(container_no: str):
     return container_no[:-4], container_no[-4:]
 
 
-def fit_font_size(text: str, font_name: str, start_size: float, max_width: float, min_size: float = 8) -> float:
+def fit_font_size(
+    text: str,
+    font_name: str,
+    start_size: float,
+    max_width: float,
+    min_size: float = 8
+) -> float:
     size = start_size
     while size > min_size and stringWidth(text, font_name, size) > max_width:
         size -= 0.5
@@ -59,11 +65,16 @@ def fit_font_size(text: str, font_name: str, start_size: float, max_width: float
 
 
 def calc_sku_font_size(sku: str) -> float:
+    """
+    SKU 字号尽可能大，但需保证：
+    1. 不超出页面可用宽度
+    2. 整体 1-5 行仍保持在页面高度内
+    """
     sku = normalize_text(sku)
     max_size = 34.0
     min_size = 8.0
     max_width = AVAILABLE_WIDTH
-    max_visual_height = 0.52 * inch
+    max_visual_height = 0.50 * inch
 
     size = max_size
     while size >= min_size:
@@ -76,12 +87,22 @@ def calc_sku_font_size(sku: str) -> float:
     return min_size
 
 
-def draw_centered_text(c: canvas.Canvas, text: str, y: float, font_name: str, font_size: float):
+def draw_centered_text(
+    c: canvas.Canvas,
+    text: str,
+    y: float,
+    font_name: str,
+    font_size: float
+):
     c.setFont(font_name, font_size)
     c.drawCentredString(PAGE_WIDTH / 2, y, text)
 
 
 def draw_container_line(c: canvas.Canvas, container_no: str):
+    """
+    第一行：
+    集装箱号，后四位加粗并加下划线，整体居中
+    """
     prefix, last4 = split_container(container_no)
 
     prefix_size = 20
@@ -90,6 +111,7 @@ def draw_container_line(c: canvas.Canvas, container_no: str):
     prefix_width = stringWidth(prefix, FONT_REGULAR, prefix_size)
     last4_width = stringWidth(last4, FONT_BOLD, last4_size)
     total_width = prefix_width + last4_width
+
     start_x = (PAGE_WIDTH - total_width) / 2
 
     if prefix:
@@ -111,13 +133,23 @@ def draw_client_line(c: canvas.Canvas, client_code: str):
 
 def draw_sku_line(c: canvas.Canvas, sku: str):
     font_size = calc_sku_font_size(sku)
-    font_size = fit_font_size(sku, FONT_BOLD, font_size, AVAILABLE_WIDTH, min_size=8)
+    font_size = fit_font_size(
+        sku,
+        FONT_BOLD,
+        font_size,
+        AVAILABLE_WIDTH,
+        min_size=8
+    )
     draw_centered_text(c, sku, Y3, FONT_BOLD, font_size)
 
 
 def barcode_png_bytes(sku: str) -> bytes:
     """
-    使用 python-barcode 生成 PNG 条码。
+    使用 python-barcode 生成 PNG 条码
+    针对仓库扫码进行增强：
+    - 条码高度 >= 1 inch
+    - module_width 更大
+    - 留白更充分
     """
     sku = normalize_text(sku)
     fp = io.BytesIO()
@@ -127,9 +159,9 @@ def barcode_png_bytes(sku: str) -> bytes:
         fp,
         options={
             "write_text": False,
-            "module_width": 0.20,
-            "module_height": 18.0,
-            "quiet_zone": 1.0,
+            "module_width": 0.35,   # 加粗，提高可扫描性
+            "module_height": 25.0,  # 提高条码高度
+            "quiet_zone": 2.0,      # 左右留白
             "background": "white",
             "foreground": "black",
             "dpi": 300,
@@ -142,7 +174,7 @@ def barcode_png_bytes(sku: str) -> bytes:
 
 def barcode_svg_markup(sku: str) -> str:
     """
-    使用 python-barcode 生成 SVG，用于页面预览。
+    页面预览使用 SVG 条码
     """
     sku = normalize_text(sku)
     fp = io.BytesIO()
@@ -152,9 +184,9 @@ def barcode_svg_markup(sku: str) -> str:
         fp,
         options={
             "write_text": False,
-            "module_width": 0.20,
-            "module_height": 18.0,
-            "quiet_zone": 1.0,
+            "module_width": 0.35,
+            "module_height": 25.0,
+            "quiet_zone": 2.0,
             "background": "white",
             "foreground": "black",
         },
@@ -164,16 +196,22 @@ def barcode_svg_markup(sku: str) -> str:
 
 
 def draw_barcode_line(c: canvas.Canvas, sku: str):
+    """
+    第四行：真实 Code128 条码
+    条码高度至少 1 inch
+    """
     png_bytes = barcode_png_bytes(sku)
     image = Image.open(io.BytesIO(png_bytes))
 
-    # 保持宽高比，并限制在标签区域内
     img_w, img_h = image.size
-    target_h = 0.72 * inch
+
+    # 保证条码打印高度 >= 1 inch
+    target_h = 1.0 * inch
     scale = target_h / img_h
     target_w = img_w * scale
 
-    max_w = AVAILABLE_WIDTH * 0.84
+    # 尽量不要过度压缩宽度
+    max_w = AVAILABLE_WIDTH * 0.95
     if target_w > max_w:
         scale = max_w / img_w
         target_w = img_w * scale
@@ -194,7 +232,12 @@ def draw_qty_line(c: canvas.Canvas):
     c.drawString(x, Y5, qty_text)
 
 
-def draw_one_label(c: canvas.Canvas, container_no: str, client_code: str, sku: str):
+def draw_one_label(
+    c: canvas.Canvas,
+    container_no: str,
+    client_code: str,
+    sku: str
+):
     draw_container_line(c, container_no)
     draw_client_line(c, client_code)
     draw_sku_line(c, sku)
@@ -241,7 +284,11 @@ def validate_records(df: pd.DataFrame) -> pd.DataFrame:
         bad_rows = (df.index[invalid_qty] + 2).tolist()
         raise ValueError(f"标签数量存在无效值，请检查 Excel 行号：{bad_rows}")
 
-    blank_mask = (df["集装箱号"] == "") | (df["客户代码"] == "") | (df["SKU"] == "")
+    blank_mask = (
+        (df["集装箱号"] == "") |
+        (df["客户代码"] == "") |
+        (df["SKU"] == "")
+    )
     if blank_mask.any():
         bad_rows = (df.index[blank_mask] + 2).tolist()
         raise ValueError(f"存在空白必填字段，请检查 Excel 行号：{bad_rows}")
@@ -257,6 +304,7 @@ def create_excel_template() -> bytes:
             {"集装箱号": "TGHU7654321", "客户代码": "BASEUS", "SKU": "SKU-002-ABC", "标签数量": 3},
         ]
     )
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         template.to_excel(writer, index=False, sheet_name="labels")
@@ -265,6 +313,9 @@ def create_excel_template() -> bytes:
 
 
 def render_label_preview(container_no: str, client_code: str, sku: str):
+    """
+    页面预览
+    """
     prefix, last4 = split_container(container_no)
     safe_prefix = prefix.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe_last4 = last4.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -273,6 +324,7 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
 
     font_px = int(calc_sku_font_size(sku) * 1.35)
     font_px = max(font_px, 14)
+
     barcode_svg = barcode_svg_markup(sku)
 
     html = f"""
@@ -292,9 +344,11 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
         <div style="text-align:center; font-size:28px; line-height:1.15; margin-top:4px;">
             <span>{safe_prefix}</span><span style="font-weight:700; text-decoration: underline;">{safe_last4}</span>
         </div>
+
         <div style="text-align:center; font-size:28px; line-height:1.1; font-weight:700; margin-top:8px;">
             {safe_client}
         </div>
+
         <div style="
             text-align:center;
             font-size:{font_px}px;
@@ -306,11 +360,13 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
         ">
             {safe_sku}
         </div>
-        <div style="display:flex; justify-content:center; align-items:center; margin-top:8px; min-height:64px;">
-            <div style="width:82%; height:64px; overflow:hidden;">
+
+        <div style="display:flex; justify-content:center; align-items:center; margin-top:8px; min-height:80px;">
+            <div style="width:90%; height:80px; overflow:hidden;">
                 {barcode_svg}
             </div>
         </div>
+
         <div style="text-align:right; font-size:22px; font-weight:700; margin-bottom:4px;">
             Qty: __________
         </div>
@@ -321,11 +377,14 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
 
 def collect_manual_records() -> pd.DataFrame:
     st.subheader("手动输入")
+
     with st.form("manual_form", clear_on_submit=False):
         col1, col2 = st.columns(2)
+
         with col1:
             container_no = st.text_input("集装箱号", placeholder="例如：TCLU1234567")
             client_code = st.text_input("客户代码", placeholder="例如：JDL / BASEUS / ABC")
+
         with col2:
             sku = st.text_input("SKU", placeholder="例如：SKU-123456789")
             qty = st.number_input("标签数量", min_value=1, max_value=10000, value=1, step=1)
@@ -364,16 +423,21 @@ def collect_manual_records() -> pd.DataFrame:
     if st.session_state.manual_rows:
         st.markdown("**当前手动输入清单**")
         st.dataframe(pd.DataFrame(st.session_state.manual_rows), use_container_width=True)
+
         if st.button("清空手动输入清单"):
             st.session_state.manual_rows = []
             st.rerun()
 
-    return pd.DataFrame(st.session_state.manual_rows) if st.session_state.manual_rows else pd.DataFrame(columns=["集装箱号", "客户代码", "SKU", "标签数量"])
+    if st.session_state.manual_rows:
+        return pd.DataFrame(st.session_state.manual_rows)
+
+    return pd.DataFrame(columns=["集装箱号", "客户代码", "SKU", "标签数量"])
 
 
 def collect_excel_records() -> pd.DataFrame:
     st.subheader("Excel 批量导入")
     st.caption("Excel 必须包含以下列名：集装箱号、客户代码、SKU、标签数量")
+
     template_bytes = create_excel_template()
     st.download_button(
         "下载 Excel 模板",
@@ -400,8 +464,10 @@ def collect_excel_records() -> pd.DataFrame:
 
 def combine_sources(manual_df: pd.DataFrame, excel_df: pd.DataFrame) -> pd.DataFrame:
     frames: List[pd.DataFrame] = []
+
     if not manual_df.empty:
         frames.append(manual_df)
+
     if not excel_df.empty:
         frames.append(excel_df)
 
@@ -432,9 +498,16 @@ def preview_records(df: pd.DataFrame):
         )
 
 
-st.set_page_config(page_title="收货标签生成器（无 ReportLab 条码依赖版）", page_icon="🏷️", layout="wide")
+# =========================
+# Streamlit 页面
+# =========================
+st.set_page_config(
+    page_title="收货标签生成器",
+    page_icon="🏷️",
+    layout="wide"
+)
 
-st.title("🏷️ 收货标签生成器（无 ReportLab 条码依赖版）")
+st.title("🏷️ 收货标签生成器")
 st.caption("支持手动输入 + Excel 批量导入；支持同一 PDF 内生成多组不同 SKU 标签；支持先预览后下载 PDF。")
 
 left, right = st.columns([1, 1])
@@ -482,5 +555,6 @@ st.info(
     "- 纸张方向：横向\n"
     "- 页面大小：4 × 6 inch\n"
     "- 缩放：100% / Actual Size\n"
+    "- 条码高度已增强，适合仓库扫码场景\n"
     "- 每页 1 张标签"
 )
