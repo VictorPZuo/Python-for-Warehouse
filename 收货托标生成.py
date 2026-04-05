@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-import base64
 import io
 import re
 from typing import List
 
 import pandas as pd
 import streamlit as st
-from reportlab.graphics.barcode import code128, createBarcodeDrawing
+from reportlab.graphics.barcode import code128
 from reportlab.lib.units import inch
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
@@ -58,11 +57,6 @@ def fit_font_size(text: str, font_name: str, start_size: float, max_width: float
 
 
 def calc_sku_font_size(sku: str) -> float:
-    """
-    SKU 字号逻辑：
-    - 在不超过页面可用宽度的前提下尽可能大
-    - 同时不挤压上下内容，保证整体 1~5 行保持在页面高度内
-    """
     sku = normalize_text(sku)
     max_size = 34.0
     min_size = 8.0
@@ -94,7 +88,6 @@ def draw_container_line(c: canvas.Canvas, container_no: str):
     prefix_width = stringWidth(prefix, FONT_REGULAR, prefix_size)
     last4_width = stringWidth(last4, FONT_BOLD, last4_size)
     total_width = prefix_width + last4_width
-
     start_x = (PAGE_WIDTH - total_width) / 2
 
     if prefix:
@@ -231,27 +224,12 @@ def create_excel_template() -> bytes:
     return output.getvalue()
 
 
-def barcode_svg_data_uri(sku: str) -> str:
-    """
-    使用 SVG 预览条码，避免依赖 reportlab.graphics.renderPM。
-    在 Streamlit Cloud 上更稳定。
-    """
-    bc = build_barcode_obj(sku)
-    drawing = createBarcodeDrawing(
-        "Code128",
-        value=sku,
-        barWidth=getattr(bc, "barWidth", 0.5),
-        barHeight=0.72 * inch,
-        humanReadable=False,
-    )
-    svg_bytes = drawing.asString("svg")
-    return "data:image/svg+xml;base64," + base64.b64encode(svg_bytes).decode("utf-8")
-
-
 def render_label_preview(container_no: str, client_code: str, sku: str):
+    """
+    纯 HTML 预览，不再依赖 createBarcodeDrawing。
+    页面预览展示版式与文字；正式 PDF 仍会输出真实 Code128 条码。
+    """
     prefix, last4 = split_container(container_no)
-    barcode_uri = barcode_svg_data_uri(sku)
-
     safe_prefix = prefix.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe_last4 = last4.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe_client = client_code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -291,8 +269,22 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
         ">
             {safe_sku}
         </div>
-        <div style="display:flex; justify-content:center; margin-top:8px;">
-            <img src="{barcode_uri}" style="max-width:82%; height:64px;" />
+        <div style="display:flex; justify-content:center; align-items:center; margin-top:8px; height:64px;">
+            <div style="
+                width:82%;
+                height:58px;
+                border:1px solid #bbb;
+                background: repeating-linear-gradient(
+                    to right,
+                    #111 0px, #111 2px,
+                    #fff 2px, #fff 4px,
+                    #111 4px, #111 5px,
+                    #fff 5px, #fff 8px
+                );
+            "></div>
+        </div>
+        <div style="text-align:center; font-size:12px; color:#666; margin-top:-6px;">
+            预览条码占位图（正式 PDF 中为真实 Code128 条码）
         </div>
         <div style="text-align:right; font-size:22px; font-weight:700; margin-bottom:4px;">
             Qty: __________
@@ -415,12 +407,9 @@ def preview_records(df: pd.DataFrame):
         )
 
 
-# =========================
-# Streamlit UI
-# =========================
-st.set_page_config(page_title="收货标签生成器（增强版）", page_icon="🏷️", layout="wide")
+st.set_page_config(page_title="收货标签生成器（云端兼容版）", page_icon="🏷️", layout="wide")
 
-st.title("🏷️ 收货标签生成器（增强版）")
+st.title("🏷️ 收货标签生成器（云端兼容版）")
 st.caption("支持手动输入 + Excel 批量导入；支持同一 PDF 内生成多组不同 SKU 标签；支持先预览后下载 PDF。")
 
 left, right = st.columns([1, 1])
