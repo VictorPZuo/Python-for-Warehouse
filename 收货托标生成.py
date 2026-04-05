@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import base64
 import io
 import re
 from typing import List
@@ -159,9 +160,9 @@ def barcode_png_bytes(sku: str) -> bytes:
         fp,
         options={
             "write_text": False,
-            "module_width": 0.35,   # 加粗，提高可扫描性
-            "module_height": 25.0,  # 提高条码高度
-            "quiet_zone": 2.0,      # 左右留白
+            "module_width": 0.35,
+            "module_height": 25.0,
+            "quiet_zone": 2.0,
             "background": "white",
             "foreground": "black",
             "dpi": 300,
@@ -172,9 +173,10 @@ def barcode_png_bytes(sku: str) -> bytes:
     return fp.getvalue()
 
 
-def barcode_svg_markup(sku: str) -> str:
+def barcode_svg_data_uri(sku: str) -> str:
     """
-    页面预览使用 SVG 条码
+    生成可直接用于 HTML <img> 的 SVG data URI
+    用于页面预览，避免直接显示 SVG 源代码
     """
     sku = normalize_text(sku)
     fp = io.BytesIO()
@@ -192,25 +194,25 @@ def barcode_svg_markup(sku: str) -> str:
         },
     )
     fp.seek(0)
-    return fp.read().decode("utf-8")
+    svg_bytes = fp.read()
+    svg_b64 = base64.b64encode(svg_bytes).decode("utf-8")
+    return f"data:image/svg+xml;base64,{svg_b64}"
 
 
 def draw_barcode_line(c: canvas.Canvas, sku: str):
     """
     第四行：真实 Code128 条码
-    条码高度至少 1 inch
+    条码打印高度至少 1 inch
     """
     png_bytes = barcode_png_bytes(sku)
     image = Image.open(io.BytesIO(png_bytes))
 
     img_w, img_h = image.size
 
-    # 保证条码打印高度 >= 1 inch
     target_h = 1.0 * inch
     scale = target_h / img_h
     target_w = img_w * scale
 
-    # 尽量不要过度压缩宽度
     max_w = AVAILABLE_WIDTH * 0.95
     if target_w > max_w:
         scale = max_w / img_w
@@ -314,9 +316,10 @@ def create_excel_template() -> bytes:
 
 def render_label_preview(container_no: str, client_code: str, sku: str):
     """
-    页面预览
+    页面预览：显示真正的标签效果，而不是 SVG 代码文本
     """
     prefix, last4 = split_container(container_no)
+
     safe_prefix = prefix.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe_last4 = last4.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe_client = client_code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -325,12 +328,12 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
     font_px = int(calc_sku_font_size(sku) * 1.35)
     font_px = max(font_px, 14)
 
-    barcode_svg = barcode_svg_markup(sku)
+    barcode_uri = barcode_svg_data_uri(sku)
 
     html = f"""
     <div style="
-        width: 540px;
-        height: 360px;
+        width: 600px;
+        height: 400px;
         border: 2px solid #d9d9d9;
         border-radius: 10px;
         background: white;
@@ -342,7 +345,8 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
         justify-content: space-between;
     ">
         <div style="text-align:center; font-size:28px; line-height:1.15; margin-top:4px;">
-            <span>{safe_prefix}</span><span style="font-weight:700; text-decoration: underline;">{safe_last4}</span>
+            <span>{safe_prefix}</span>
+            <span style="font-weight:700; text-decoration: underline;">{safe_last4}</span>
         </div>
 
         <div style="text-align:center; font-size:28px; line-height:1.1; font-weight:700; margin-top:8px;">
@@ -361,10 +365,14 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
             {safe_sku}
         </div>
 
-        <div style="display:flex; justify-content:center; align-items:center; margin-top:8px; min-height:80px;">
-            <div style="width:90%; height:80px; overflow:hidden;">
-                {barcode_svg}
-            </div>
+        <div style="
+            display:flex;
+            justify-content:center;
+            align-items:center;
+            margin-top:8px;
+            min-height:100px;
+        ">
+            <img src="{barcode_uri}" style="width:90%; max-height:90px;" />
         </div>
 
         <div style="text-align:right; font-size:22px; font-weight:700; margin-bottom:4px;">
