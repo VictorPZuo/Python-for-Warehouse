@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import base64
+import html
 import io
 import re
 from typing import List
@@ -7,7 +8,7 @@ from typing import List
 import pandas as pd
 import streamlit as st
 from barcode.codex import Code128
-from barcode.writer import ImageWriter, SVGWriter
+from barcode.writer import ImageWriter
 from PIL import Image
 from reportlab.lib.units import inch
 from reportlab.pdfbase.pdfmetrics import stringWidth
@@ -40,6 +41,10 @@ def normalize_text(text: str) -> str:
     return str(text or "").strip()
 
 
+def safe_html(text: str) -> str:
+    return html.escape(normalize_text(text))
+
+
 def sanitize_filename(text: str) -> str:
     text = re.sub(r"[^\w\-]+", "_", normalize_text(text))
     return text or "receiving_labels"
@@ -66,11 +71,6 @@ def fit_font_size(
 
 
 def calc_sku_font_size(sku: str) -> float:
-    """
-    SKU 字号尽可能大，但需保证：
-    1. 不超出页面可用宽度
-    2. 整体 1-5 行仍保持在页面高度内
-    """
     sku = normalize_text(sku)
     max_size = 34.0
     min_size = 8.0
@@ -100,10 +100,6 @@ def draw_centered_text(
 
 
 def draw_container_line(c: canvas.Canvas, container_no: str):
-    """
-    第一行：
-    集装箱号，后四位加粗并加下划线，整体居中
-    """
     prefix, last4 = split_container(container_no)
 
     prefix_size = 20
@@ -144,13 +140,9 @@ def draw_sku_line(c: canvas.Canvas, sku: str):
     draw_centered_text(c, sku, Y3, FONT_BOLD, font_size)
 
 
-def barcode_png_bytes(sku: str) -> bytes:
+def barcode_png_bytes(sku: str, for_preview: bool = False) -> bytes:
     """
     使用 python-barcode 生成 PNG 条码
-    针对仓库扫码进行增强：
-    - 条码高度 >= 1 inch
-    - module_width 更大
-    - 留白更充分
     """
     sku = normalize_text(sku)
     fp = io.BytesIO()
@@ -160,8 +152,8 @@ def barcode_png_bytes(sku: str) -> bytes:
         fp,
         options={
             "write_text": False,
-            "module_width": 0.35,
-            "module_height": 25.0,
+            "module_width": 0.35 if not for_preview else 0.30,
+            "module_height": 25.0 if not for_preview else 20.0,
             "quiet_zone": 2.0,
             "background": "white",
             "foreground": "black",
@@ -173,38 +165,18 @@ def barcode_png_bytes(sku: str) -> bytes:
     return fp.getvalue()
 
 
-def barcode_svg_data_uri(sku: str) -> str:
+def barcode_png_data_uri(sku: str) -> str:
     """
-    生成可直接用于 HTML <img> 的 SVG data URI
-    用于页面预览，避免直接显示 SVG 源代码
+    预览专用：返回 PNG data URI
+    避免 SVG/HTML 混排导致后续内容变成代码
     """
-    sku = normalize_text(sku)
-    fp = io.BytesIO()
-
-    barcode = Code128(sku, writer=SVGWriter())
-    barcode.write(
-        fp,
-        options={
-            "write_text": False,
-            "module_width": 0.35,
-            "module_height": 25.0,
-            "quiet_zone": 2.0,
-            "background": "white",
-            "foreground": "black",
-        },
-    )
-    fp.seek(0)
-    svg_bytes = fp.read()
-    svg_b64 = base64.b64encode(svg_bytes).decode("utf-8")
-    return f"data:image/svg+xml;base64,{svg_b64}"
+    png_bytes = barcode_png_bytes(sku, for_preview=True)
+    b64 = base64.b64encode(png_bytes).decode("utf-8")
+    return f"data:image/png;base64,{b64}"
 
 
 def draw_barcode_line(c: canvas.Canvas, sku: str):
-    """
-    第四行：真实 Code128 条码
-    条码打印高度至少 1 inch
-    """
-    png_bytes = barcode_png_bytes(sku)
+    png_bytes = barcode_png_bytes(sku, for_preview=False)
     image = Image.open(io.BytesIO(png_bytes))
 
     img_w, img_h = image.size
@@ -315,22 +287,19 @@ def create_excel_template() -> bytes:
 
 
 def render_label_preview(container_no: str, client_code: str, sku: str):
-    """
-    页面预览：显示真正的标签效果，而不是 SVG 代码文本
-    """
     prefix, last4 = split_container(container_no)
 
-    safe_prefix = prefix.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    safe_last4 = last4.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    safe_client = client_code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    safe_sku = sku.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    safe_prefix = safe_html(prefix)
+    safe_last4 = safe_html(last4)
+    safe_client = safe_html(client_code)
+    safe_sku = safe_html(sku)
 
     font_px = int(calc_sku_font_size(sku) * 1.35)
     font_px = max(font_px, 14)
 
-    barcode_uri = barcode_svg_data_uri(sku)
+    barcode_uri = barcode_png_data_uri(sku)
 
-    html = f"""
+    html_block = f"""
     <div style="
         width: 600px;
         height: 400px;
@@ -343,13 +312,28 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
         display: flex;
         flex-direction: column;
         justify-content: space-between;
+        overflow: hidden;
     ">
-        <div style="text-align:center; font-size:28px; line-height:1.15; margin-top:4px;">
+        <div style="
+            text-align:center;
+            font-size:28px;
+            line-height:1.15;
+            margin-top:4px;
+            white-space:nowrap;
+            overflow:hidden;
+        ">
             <span>{safe_prefix}</span>
             <span style="font-weight:700; text-decoration: underline;">{safe_last4}</span>
         </div>
 
-        <div style="text-align:center; font-size:28px; line-height:1.1; font-weight:700; margin-top:8px;">
+        <div style="
+            text-align:center;
+            font-size:28px;
+            line-height:1.1;
+            font-weight:700;
+            margin-top:8px;
+            word-break: break-word;
+        ">
             {safe_client}
         </div>
 
@@ -372,15 +356,20 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
             margin-top:8px;
             min-height:100px;
         ">
-            <img src="{barcode_uri}" style="width:90%; max-height:90px;" />
+            <img src="{barcode_uri}" style="width:90%; max-height:90px; object-fit:contain;" />
         </div>
 
-        <div style="text-align:right; font-size:22px; font-weight:700; margin-bottom:4px;">
+        <div style="
+            text-align:right;
+            font-size:22px;
+            font-weight:700;
+            margin-bottom:4px;
+        ">
             Qty: __________
         </div>
     </div>
     """
-    st.markdown(html, unsafe_allow_html=True)
+    st.markdown(html_block, unsafe_allow_html=True)
 
 
 def collect_manual_records() -> pd.DataFrame:
@@ -506,9 +495,6 @@ def preview_records(df: pd.DataFrame):
         )
 
 
-# =========================
-# Streamlit 页面
-# =========================
 st.set_page_config(
     page_title="收货标签生成器",
     page_icon="🏷️",
