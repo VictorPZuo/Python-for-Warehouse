@@ -7,6 +7,7 @@ from typing import List
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from barcode.codex import Code128
 from barcode.writer import ImageWriter
 from PIL import Image
@@ -166,10 +167,6 @@ def barcode_png_bytes(sku: str, for_preview: bool = False) -> bytes:
 
 
 def barcode_png_data_uri(sku: str) -> str:
-    """
-    预览专用：返回 PNG data URI
-    避免 SVG/HTML 混排导致后续内容变成代码
-    """
     png_bytes = barcode_png_bytes(sku, for_preview=True)
     b64 = base64.b64encode(png_bytes).decode("utf-8")
     return f"data:image/png;base64,{b64}"
@@ -286,7 +283,7 @@ def create_excel_template() -> bytes:
     return output.getvalue()
 
 
-def render_label_preview(container_no: str, client_code: str, sku: str):
+def build_preview_html(container_no: str, client_code: str, sku: str) -> str:
     prefix, last4 = split_container(container_no)
 
     safe_prefix = safe_html(prefix)
@@ -299,77 +296,97 @@ def render_label_preview(container_no: str, client_code: str, sku: str):
 
     barcode_uri = barcode_png_data_uri(sku)
 
-    html_block = f"""
-    <div style="
-        width: 600px;
-        height: 400px;
-        border: 2px solid #d9d9d9;
-        border-radius: 10px;
-        background: white;
-        padding: 18px 26px;
-        margin: 8px 0 18px 0;
-        box-sizing: border-box;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        overflow: hidden;
-    ">
-        <div style="
-            text-align:center;
-            font-size:28px;
-            line-height:1.15;
-            margin-top:4px;
-            white-space:nowrap;
-            overflow:hidden;
-        ">
-            <span>{safe_prefix}</span>
-            <span style="font-weight:700; text-decoration: underline;">{safe_last4}</span>
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {{
+                margin: 0;
+                padding: 0;
+                background: white;
+                font-family: Arial, Helvetica, sans-serif;
+            }}
+            .label {{
+                width: 600px;
+                height: 400px;
+                border: 2px solid #d9d9d9;
+                border-radius: 10px;
+                background: white;
+                padding: 18px 26px;
+                box-sizing: border-box;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+                overflow: hidden;
+            }}
+            .line1 {{
+                text-align: center;
+                font-size: 28px;
+                line-height: 1.15;
+                margin-top: 4px;
+                white-space: nowrap;
+                overflow: hidden;
+            }}
+            .line2 {{
+                text-align: center;
+                font-size: 28px;
+                line-height: 1.1;
+                font-weight: 700;
+                margin-top: 8px;
+                word-break: break-word;
+            }}
+            .line3 {{
+                text-align: center;
+                font-size: {font_px}px;
+                line-height: 1.05;
+                font-weight: 700;
+                margin-top: 10px;
+                word-break: break-all;
+                overflow-wrap: anywhere;
+            }}
+            .barcode-wrap {{
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                margin-top: 8px;
+                min-height: 100px;
+            }}
+            .barcode-wrap img {{
+                width: 90%;
+                max-height: 90px;
+                object-fit: contain;
+            }}
+            .line5 {{
+                text-align: right;
+                font-size: 22px;
+                font-weight: 700;
+                margin-bottom: 4px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="label">
+            <div class="line1">
+                <span>{safe_prefix}</span>
+                <span style="font-weight:700; text-decoration: underline;">{safe_last4}</span>
+            </div>
+            <div class="line2">{safe_client}</div>
+            <div class="line3">{safe_sku}</div>
+            <div class="barcode-wrap">
+                <img src="{barcode_uri}" />
+            </div>
+            <div class="line5">Qty: __________</div>
         </div>
-
-        <div style="
-            text-align:center;
-            font-size:28px;
-            line-height:1.1;
-            font-weight:700;
-            margin-top:8px;
-            word-break: break-word;
-        ">
-            {safe_client}
-        </div>
-
-        <div style="
-            text-align:center;
-            font-size:{font_px}px;
-            line-height:1.05;
-            font-weight:700;
-            margin-top:10px;
-            word-break: break-all;
-            overflow-wrap: anywhere;
-        ">
-            {safe_sku}
-        </div>
-
-        <div style="
-            display:flex;
-            justify-content:center;
-            align-items:center;
-            margin-top:8px;
-            min-height:100px;
-        ">
-            <img src="{barcode_uri}" style="width:90%; max-height:90px; object-fit:contain;" />
-        </div>
-
-        <div style="
-            text-align:right;
-            font-size:22px;
-            font-weight:700;
-            margin-bottom:4px;
-        ">
-            Qty: __________
-        </div>
-    </div>
+    </body>
+    </html>
     """
-    st.markdown(html_block, unsafe_allow_html=True)
+
+
+def render_label_preview(container_no: str, client_code: str, sku: str):
+    preview_html = build_preview_html(container_no, client_code, sku)
+    components.html(preview_html, height=430, scrolling=False)
 
 
 def collect_manual_records() -> pd.DataFrame:
@@ -380,10 +397,10 @@ def collect_manual_records() -> pd.DataFrame:
 
         with col1:
             container_no = st.text_input("集装箱号", placeholder="例如：TCLU1234567")
-            client_code = st.text_input("客户代码", placeholder="例如：JDL / BASEUS / ABC")
+            client_code = st.text_input("客户代码", placeholder="例如：YQN / JDL / BASEUS")
 
         with col2:
-            sku = st.text_input("SKU", placeholder="例如：SKU-123456789")
+            sku = st.text_input("SKU", placeholder="例如：6574288KKT552")
             qty = st.number_input("标签数量", min_value=1, max_value=10000, value=1, step=1)
 
         add_row = st.form_submit_button("加入本次生成清单")
